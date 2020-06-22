@@ -1,9 +1,9 @@
 #include <Arduino.h>
 // #include <MemoryFree.h>
 #include <dht11.h>
+#include <helper.h>
 #include <a6.h>
 #include <buffer.h>
-#include <helper.hpp>
 
 #define DEBUG 1 // debug verbose level (0, 1, 2)
 
@@ -14,15 +14,16 @@
 #define DEVICE_NUMBER   1  // device number
 #define BTN_SEND        2  // send button pin
 #define BTN_STOP        3  // stop button pin
-#define LED_WHITE_PIN   4  // white led
-#define LED_GPRS_PIN    5  // GPRS status indicator
-#define LED_NETWORK_PIN 6  // Network status indicator
-#define LED_MODULE_PIN  7  // Module status indicator
-#define LED_YELLOW_PIN  8  // yellow led
-#define LED_GREEN_PIN   9  // green led
-#define LED_RED_PIN     10 // red led
+#define LED_RED_PIN     4  // red led
+#define LED_GREEN_PIN   5  // green led
+#define LED_YELLOW_PIN  6  // yellow led
+#define LED_WHITE_PIN   7  // white led
+#define LED_GPRS_PIN    8  // GPRS status indicator
+#define LED_NETWORK_PIN 9  // Network status indicator
+#define LED_MODULE_PIN  10 // Module status indicator
 #define DHT11_1_PIN     14 // DHT11 sensor
 #define FAN_PIN         15 // fan
+#define RST_PIN         15 // A6 module reset pin
 
 static const char HOST[] PROGMEM
     = "www.europe-west1-arduino-sensors-754e5.cloudfunctions.net";
@@ -45,6 +46,7 @@ struct sensor_t {
 };
 
 struct settings_t {
+  uint8_t errors            = 0;
   uint8_t stop              = 0;
   uint8_t led               = 0;
   uint8_t fan               = 0;
@@ -93,6 +95,8 @@ void setup()
 
   // init fan pins
   pinMode(FAN_PIN, OUTPUT);
+  pinMode(RST_PIN, OUTPUT);
+  digitalWrite(RST_PIN, LOW);
 
   // init hardware serial
   Serial.begin(SERIAL_BAUD);
@@ -101,7 +105,12 @@ void setup()
   begin(A6_BAUD_RATE);
 
   // init modem
-  if (initModem() == 0) resetModuleLeds();
+  if (initModem() == 0)
+    resetModuleLeds();
+  else
+    settings.errors += 1;
+
+  void setSensorLeds();
 
   // set starting time
   settings.updateStart = settings.showTimeStart = millis();
@@ -109,17 +118,37 @@ void setup()
 
 void loop()
 {
+  if (settings.errors > 2) {
+    resetModem();
+    waitSeconds(PSTR("Reseting modem"), 10);
+    initModem();
+    settings.errors      = 0;        // reset errors
+    settings.updateStart = millis(); // reset start time
+  }
+
   readSendButton();
   readStopButton();
 
 #if 1
   // check if interval time is passed
   if (!settings.stop && (millis() - settings.updateStart) > settings.updateInterval) {
+
+    // ! TODO need optimization
+
     // fetch settings from API
     if (getSettingsFormAPI(true) == 0)
       // post sensor data to API
-      if (postDataToAPI(false) == 0) resetModuleLeds();
-
+      if (postDataToAPI(false) == 0) {
+        resetModuleLeds();
+        settings.errors = 0;
+      } else {
+        settings.errors += 1;
+        if (initModem() == 0) resetModuleLeds();
+      }
+    else {
+      settings.errors += 1;
+      if (initModem() == 0) resetModuleLeds();
+    }
     settings.updateStart = millis(); // reset start time
   }
 #endif
@@ -169,6 +198,11 @@ int8_t initModem()
   return 0;
 }
 
+void resetModule()
+{
+  digitalWrite(RST_PIN, LOW);
+}
+
 void readSendButton()
 {
   // only execute if button state is changed to HIGH
@@ -183,8 +217,8 @@ void readStopButton()
 {
   // only execute if button state is changed to HIGH
   if (buttonDebounce(buttonStop) && buttonStop.state == HIGH) {
-    print(Serial, F("STOP: "), settings.stop);
     settings.stop = !settings.stop;
+    print(Serial, F("STOP: "), settings.stop);
   }
 }
 

@@ -25,6 +25,12 @@ void setTimeout(unsigned int timeout)
   _board.setTimeout(timeout);
 }
 
+void resetModem()
+{
+  command(PSTR("AT"), 1000, 20);
+  commandSend(PSTR("AT+CFUN=1"));
+}
+
 /*******************************************************
  * STREAM FUNCTIONS
  *******************************************************/
@@ -200,8 +206,13 @@ int8_t checkSignal(uint8_t repetition)
 {
   while (repetition--) {
     if (command(PSTR("AT+CSQ"), "+CSQ: ") == -1) return -1;
-    if (_board.parseInt() > 10) return 0;
+    if (_board.parseInt() > 10) {
+      print(Serial, F("Mobile signal OK"));
+      return 0;
+    } else
+      delay(1000);
   }
+  print(Serial, F("Poor mobile signal"));
   return -1;
 }
 
@@ -223,13 +234,13 @@ int8_t openTCP(CPSTR host)
 {
   // close TCP
   closeTCP();
-  // if (closeTCP() == -1) return -1;
-  // command(PSTR("AT+CIPCLOSE"));
 
+  command(PSTR("AT"));
+
+  // open TCP
   _board.print(F("AT+CIPSTART=\"TCP\",\""));
   _board.print(CF(host));
-  if (command(PSTR("\",80"), "OK", 10000, 3) == -1) return -1;
-  // if (command(CIPSTART), "OK", 10000, 3) == -1) return -1;
+  if (command(PSTR("\",80"), "OK", 10000, 1) == -1) return -1;
   return 0;
 }
 
@@ -249,10 +260,16 @@ int8_t initModule()
 
 int8_t initNetwork()
 {
-  // check if module is registered on network
-  if (command(PSTR("AT+CREG?"), "+CREG: 1,1", 1000, 20) == -1) return -1;
+  // check mobile signal
+  if (checkSignal(30) == -1) return -1;
+
+  // check if module is registered on T_MOBILE
+  if (command(PSTR("AT+COPS?"), "1,2,\"21901\"", 1000, 20) == -1) return -1;
 
   // TODO Network registration to "HT-MOBILE"
+
+  // check if module is registered on network
+  if (command(PSTR("AT+CREG?"), "+CREG: 1,1", 1000, 20) == -1) return -1;
 
   return 0;
 }
@@ -261,19 +278,16 @@ int8_t initGPRS()
 {
   // first check if PDP context with CID 1 is activated,
   // it usually means that GPRS is active so we skip the rest
-  if (command(PSTR("AT+CGACT?"), "+CGACT: 1, 1", 1000, 1) == 0) return 0;
-
-  // attach to PS (packet service)
-  // if (command(PSTR("AT+CGATT?"), "+CGATT:1", 1000, 1) == -1)
-  //   if (command(PSTR("AT+CGATT=1"), "OK", 10000, 1) == -1) return -1;
-
-  // TODO  check if PDP is already set
+  if (command(PSTR("AT+CGACT?"), "+CGACT: 1, 1", 1000, 1) == 0)
+    // chevk if PDP conetxt is valid
+    if (command(PSTR("AT+CGDCONT?"), "internet.ht.hr", 1000, 1) == 0)
+      return 0;
 
   // define a PDP context with CID 1
   if (command(CGDCONT) == -1) return -1;
 
   // activate the PDP context with CID 1
-  if (command(PSTR("AT+CGACT=1,1"), 10000, 1) == -1) return -1;
+  if (command(PSTR("AT+CGACT=1,1"), 20000, 1) == -1) return -1;
 
   return 0;
 }
@@ -310,15 +324,15 @@ int8_t httpPost(CPSTR host,
   // open TCP
   if (openTCP(host) == -1) return -1;
 
-  // send data
-  if (command(PSTR("AT+CIPSEND"), ">", 10000, 1) == -1) return -1;
-
   // get conten size
   uint8_t n = 46;
   n += numDigits(deviceNumber);
   n += numDigits(co2);
   n += numDigits(humidity);
   n += numDigits(temperature);
+
+  // send data
+  if (command(PSTR("AT+CIPSEND"), ">", 10000, 1) == -1) return -1;
 
   // HTTP header
   print(_board, F("POST "), CF(path), F(" HTTP/1.1"));

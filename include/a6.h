@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <buffer.h>
-#include <helper.hpp>
+#include <helper.h>
 
 #ifndef A6_2_H
 #define A6_2_H
@@ -28,6 +28,7 @@
 // serial
 void begin(long speed);
 void setTimeout(unsigned int timeout = A6_DEFAULT_TIMEOUT);
+void resetModem(void);
 
 // stream
 void _flush(void);

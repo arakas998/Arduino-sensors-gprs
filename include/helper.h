@@ -4,14 +4,14 @@
 #define HELPER_HPP
 
 template <typename T>
-inline void print(Stream& s, T last)
+void print(Stream& s, T last)
 {
   s.print(last);
   s.print("\r\n");
 }
 
 template <typename T, typename... Args>
-inline void print(Stream& s, T head, Args... tail)
+void print(Stream& s, T head, Args... tail)
 {
   s.print(head);
   print(s, tail...);
@@ -35,4 +35,7 @@ uint8_t numDigits(T number)
   }
   return digits;
 }
+
+void waitSeconds(const char* msg, uint8_t sec);
+
 #endif
