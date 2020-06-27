@@ -7,6 +7,8 @@
 
 #define DEBUG 1 // debug verbose level (0, 1, 2)
 
+#define MAX_ERRORS 3 // max errors before modem reset
+
 #define SERIAL_BAUD        9600  // Baudrate between Arduino and PC
 #define DEFAULT_INTERVAL   10000 // Default interval
 #define SHOW_TIME_INTERVAL 1000  // Default interval
@@ -39,14 +41,15 @@ struct button_t {
 } buttonSend, buttonStop;
 
 struct sensor_t {
-  uint8_t vallue    = 0;
+  uint8_t value     = 0;
   uint8_t lastValue = 0;
   uint8_t min       = 20;
   uint8_t max       = 80;
 };
 
 struct settings_t {
-  uint8_t errors            = 0;
+  // uint8_t sensor_errors     = 0;
+  uint8_t http_errors       = 0;
   uint8_t stop              = 0;
   uint8_t led               = 0;
   uint8_t fan               = 0;
@@ -93,22 +96,17 @@ void setup()
   // DHT11
   // pinMode(DHT11_1_PIN, INPUT);
 
-  // init fan pins
-  pinMode(FAN_PIN, OUTPUT);
-  pinMode(RST_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT); // init fan pin
+  pinMode(RST_PIN, OUTPUT); // init reset pin
   digitalWrite(RST_PIN, LOW);
 
-  // init hardware serial
-  Serial.begin(SERIAL_BAUD);
+  Serial.begin(SERIAL_BAUD); // init hardware serial
+  begin(A6_BAUD_RATE);       // init A6 board (software serial)
 
-  // init A6 board (software serial)
-  begin(A6_BAUD_RATE);
-
-  // init modem
-  if (initModem() == 0)
+  if (initModem() == 0) // init modem
     resetModuleLeds();
   else
-    settings.errors += 1;
+    settings.http_errors += 1;
 
   void setSensorLeds();
 
@@ -118,42 +116,40 @@ void setup()
 
 void loop()
 {
-  if (settings.errors > 2) {
-    resetModem();
-    waitSeconds(PSTR("Reseting modem"), 10);
-    initModem();
-    settings.errors      = 0;        // reset errors
-    settings.updateStart = millis(); // reset start time
-  }
+  // TODO instead of check for button state , we could mak an interput
 
+  // check buttons
   readSendButton();
   readStopButton();
 
-#if 1
   // check if interval time is passed
   if (!settings.stop && (millis() - settings.updateStart) > settings.updateInterval) {
+    if (getSettingsFormAPI(true) == 0  // fetch settings from API
+        && postDataToAPI(false) != -1) // post sensor data to API
+      settings.http_errors = 0;        // if success than clear error count
+    else
+      settings.http_errors += 1;
 
-    // ! TODO need optimization
+    // check if error limit is reached
+    if (settings.http_errors >= MAX_ERRORS) {
+      print(Serial, F("Error limit reached"));
+      resetModem(); // reset GSM module
+      waitSeconds(PSTR("Reseting modem"), 10);
 
-    // fetch settings from API
-    if (getSettingsFormAPI(true) == 0)
-      // post sensor data to API
-      if (postDataToAPI(false) == 0) {
+      if (initModem() == 0) {     // init modem
+        settings.http_errors = 0; // reset errors
         resetModuleLeds();
-        settings.errors = 0;
-      } else {
-        settings.errors += 1;
-        if (initModem() == 0) resetModuleLeds();
-      }
-    else {
-      settings.errors += 1;
-      if (initModem() == 0) resetModuleLeds();
+      } else
+        settings.http_errors = 3; // retry next loop
     }
+
     settings.updateStart = millis(); // reset start time
   }
-#endif
 
+  // show device curent time
   showTime();
+
+  // TODO sincronize device time with internet time
 
   // while (1)
   delay(100);
@@ -168,106 +164,6 @@ void showTime()
     print(Serial, start, F(" ms"));
     settings.showTimeStart = start;
   }
-}
-
-int8_t initModem()
-{
-  resetModuleLeds();
-
-  // init module
-  if (initModule() == -1) {
-    print(Serial, F("Module error"));
-    return -1;
-  } else
-    digitalWrite(LED_MODULE_PIN, HIGH);
-
-  // init network
-  if (initNetwork() == -1) {
-    print(Serial, F("Network error"));
-    return -2;
-  } else
-    digitalWrite(LED_NETWORK_PIN, HIGH);
-
-  // init GPRS
-  if (initGPRS() == -1) {
-    print(Serial, F("GPRS error"));
-    return -1;
-  } else
-    digitalWrite(LED_GPRS_PIN, HIGH);
-
-  return 0;
-}
-
-void resetModule()
-{
-  digitalWrite(RST_PIN, LOW);
-}
-
-void readSendButton()
-{
-  // only execute if button state is changed to HIGH
-  if (buttonDebounce(buttonSend) && buttonSend.state == HIGH) {
-    postDataToAPI(true);
-    // getSettingsFormAPI(true);
-    // readDataFromSensors();
-  }
-}
-
-void readStopButton()
-{
-  // only execute if button state is changed to HIGH
-  if (buttonDebounce(buttonStop) && buttonStop.state == HIGH) {
-    settings.stop = !settings.stop;
-    print(Serial, F("STOP: "), settings.stop);
-  }
-}
-
-int8_t postDataToAPI(bool force)
-{
-  if (readDataFromSensors() == -1) return -1;
-  if (initModem() == -1) return -1;
-
-  // post only if sensor data has changed
-  if (!force
-      && settings.co2.vallue == settings.co2.lastValue
-      && settings.humidity.vallue == settings.humidity.lastValue
-      && settings.temperature.vallue == settings.temperature.lastValue)
-    return 1;
-
-  // save last reading
-  settings.co2.lastValue         = settings.co2.vallue;
-  settings.humidity.lastValue    = settings.humidity.vallue;
-  settings.temperature.lastValue = settings.temperature.vallue;
-
-  // POST data to API
-  if (httpPost(HOST,
-               DATA_API,
-               DEVICE_NUMBER,
-               settings.co2.vallue,
-               settings.humidity.vallue,
-               settings.temperature.vallue)
-      == -1) {
-    print(Serial, F("HTTP POST error"));
-    return -1;
-  }
-
-  return 0;
-}
-
-int8_t getSettingsFormAPI(uint8_t read)
-{
-  if (initModem() == -1) return -1;
-
-  // fetch settings API
-  if (httpGet(HOST, SETTINGS_API, "\n{") == -1) {
-    print(Serial, F("HTTP GET error"));
-    return -1;
-  }
-
-  // read settings form buffer
-  if (read && readSettingsFromBuffer() == -1) return -1;
-
-  return 0;
 }
 
 int8_t readSettingsFromBuffer()
@@ -336,37 +232,76 @@ int8_t readDataFromSensors()
     return -1;
   }
 
-  settings.co2.vallue         = rand() % 40 + 20; // generate random
-  settings.humidity.vallue    = DHT11.humidity;
-  settings.temperature.vallue = DHT11.temperature;
+  settings.co2.value         = rand() % 40 + 20; // generate random
+  settings.humidity.value    = DHT11.humidity;
+  settings.temperature.value = DHT11.temperature;
 
-  print(Serial, F("CO2 (%): "), settings.co2.vallue);
-  print(Serial, F("Humidity (%): "), settings.humidity.vallue);
-  print(Serial, F("temperature (%): "), settings.temperature.vallue);
+  print(Serial, F("CO2 (%): "), settings.co2.value);
+  print(Serial, F("Humidity (%): "), settings.humidity.value);
+  print(Serial, F("temperature (%): "), settings.temperature.value);
 
   setSensorLeds();
 
   return 0;
 }
 
-void setSensorLeds()
+/*******************************************************
+ * MODULE FUNCTIONS
+ *******************************************************/
+
+int8_t initModem()
 {
-  if (settings.co2.vallue < settings.co2.min
-      || settings.humidity.vallue < settings.humidity.min
-      || settings.temperature.vallue < settings.temperature.min) {
-    digitalWrite(LED_GREEN_PIN, LOW);
-    digitalWrite(LED_RED_PIN, LOW);
-    digitalWrite(LED_YELLOW_PIN, HIGH);
-  } else if (settings.co2.vallue > settings.co2.max
-             || settings.humidity.vallue > settings.humidity.max
-             || settings.temperature.vallue > settings.temperature.max) {
-    digitalWrite(LED_GREEN_PIN, LOW);
-    digitalWrite(LED_YELLOW_PIN, LOW);
-    digitalWrite(LED_RED_PIN, HIGH);
-  } else {
-    digitalWrite(LED_YELLOW_PIN, LOW);
-    digitalWrite(LED_RED_PIN, LOW);
-    digitalWrite(LED_GREEN_PIN, HIGH);
+  resetModuleLeds();
+
+  // init module
+  if (initModule() == -1) {
+    print(Serial, F("Module error"));
+    return -1;
+  } else
+    digitalWrite(LED_MODULE_PIN, HIGH);
+
+  // init network
+  if (initNetwork() == -1) {
+    print(Serial, F("Network error"));
+    return -2;
+  } else
+    digitalWrite(LED_NETWORK_PIN, HIGH);
+
+  // init GPRS
+  if (initGPRS() == -1) {
+    print(Serial, F("GPRS error"));
+    return -1;
+  } else
+    digitalWrite(LED_GPRS_PIN, HIGH);
+
+  return 0;
+}
+
+void resetModule()
+{
+  digitalWrite(RST_PIN, LOW);
+}
+
+/*******************************************************
+ * BUTTONS FUNCTIONS
+ *******************************************************/
+
+void readSendButton()
+{
+  // only execute if button state is changed to HIGH
+  if (buttonDebounce(buttonSend) && buttonSend.state == HIGH) {
+    postDataToAPI(true);
+    // getSettingsFormAPI(true);
+    // readDataFromSensors();
+  }
+}
+
+void readStopButton()
+{
+  // only execute if button state is changed to HIGH
+  if (buttonDebounce(buttonStop) && buttonStop.state == HIGH) {
+    settings.stop = !settings.stop;
+    print(Serial, F("STOP: "), settings.stop);
   }
 }
 
@@ -403,9 +338,83 @@ bool buttonDebounce(button_t& button)
   return changed;
 }
 
+/*******************************************************
+ * LED FUNCTIONS
+ *******************************************************/
+
 void resetModuleLeds(void)
 {
   digitalWrite(LED_GPRS_PIN, LOW);
   digitalWrite(LED_NETWORK_PIN, LOW);
   digitalWrite(LED_MODULE_PIN, LOW);
+}
+
+void setSensorLeds()
+{
+  if (settings.co2.value < settings.co2.min
+      || settings.humidity.value < settings.humidity.min
+      || settings.temperature.value < settings.temperature.min) {
+    digitalWrite(LED_GREEN_PIN, LOW);
+    digitalWrite(LED_RED_PIN, LOW);
+    digitalWrite(LED_YELLOW_PIN, HIGH);
+  } else if (settings.co2.value > settings.co2.max
+             || settings.humidity.value > settings.humidity.max
+             || settings.temperature.value > settings.temperature.max) {
+    digitalWrite(LED_GREEN_PIN, LOW);
+    digitalWrite(LED_YELLOW_PIN, LOW);
+    digitalWrite(LED_RED_PIN, HIGH);
+  } else {
+    digitalWrite(LED_YELLOW_PIN, LOW);
+    digitalWrite(LED_RED_PIN, LOW);
+    digitalWrite(LED_GREEN_PIN, HIGH);
+  }
+}
+
+/*******************************************************
+ * API FUNCTIONS
+ *******************************************************/
+
+int8_t postDataToAPI(bool force)
+{
+  if (readDataFromSensors() == -1) return -2;
+
+  // post only if sensor data has changed
+  if (!force
+      && settings.co2.value == settings.co2.lastValue
+      && settings.humidity.value == settings.humidity.lastValue
+      && settings.temperature.value == settings.temperature.lastValue)
+    return 1;
+
+  // save last reading
+  settings.co2.lastValue         = settings.co2.value;
+  settings.humidity.lastValue    = settings.humidity.value;
+  settings.temperature.lastValue = settings.temperature.value;
+
+  // POST data to API
+  if (httpPost(HOST,
+               DATA_API,
+               DEVICE_NUMBER,
+               settings.co2.value,
+               settings.humidity.value,
+               settings.temperature.value)
+      == -1) {
+    print(Serial, F("HTTP POST error"));
+    return -1;
+  }
+
+  return 0;
+}
+
+int8_t getSettingsFormAPI(uint8_t read)
+{
+  // fetch settings API
+  if (httpGet(HOST, SETTINGS_API, "\n{") == -1) {
+    print(Serial, F("HTTP GET error"));
+    return -1;
+  }
+
+  // read settings form buffer
+  if (read && readSettingsFromBuffer() == -1) return -2;
+
+  return 0;
 }

@@ -109,12 +109,14 @@ void commandSend(CPSTR cmd)
  * @param response1 wait for response 1
  * @param response2 wait for response 2
  * @param response3 wait for response 3
+ * @param response4 wait for response 4
  * @param timeout timeout in mils
  * @param repetitions trial number
  * @return int8_t -1 - timeout
                    0 - found first response
                    1 - found second response
                    2 - found third response
+                   3 - found forth response
  */
 int8_t command(CPSTR cmd,
                CPSTR response1,
@@ -173,7 +175,7 @@ int8_t command(CPSTR cmd,
                uint16_t timeout,
                uint8_t repetitions)
 {
-  return command(cmd, response1, response2, NULL, timeout, repetitions);
+  return command(cmd, response1, response2, NULL, NULL, timeout, repetitions);
 }
 
 int8_t command(CPSTR cmd,
@@ -181,14 +183,14 @@ int8_t command(CPSTR cmd,
                uint16_t timeout,
                uint8_t repetitions)
 {
-  return command(cmd, response1, NULL, NULL, timeout, repetitions);
+  return command(cmd, response1, NULL, NULL, NULL, timeout, repetitions);
 }
 
 int8_t command(CPSTR cmd,
                uint16_t timeout,
                uint8_t repetitions)
 {
-  return command(cmd, "OK", NULL, NULL, timeout, repetitions);
+  return command(cmd, "OK", NULL, NULL, NULL, timeout, repetitions);
 }
 
 /*******************************************************
@@ -235,7 +237,7 @@ int8_t openTCP(CPSTR host)
   // close TCP
   closeTCP();
 
-  command(PSTR("AT"));
+  // command(PSTR("AT"));
 
   // open TCP
   _board.print(F("AT+CIPSTART=\"TCP\",\""));
@@ -278,10 +280,13 @@ int8_t initGPRS()
 {
   // first check if PDP context with CID 1 is activated,
   // it usually means that GPRS is active so we skip the rest
-  if (command(PSTR("AT+CGACT?"), "+CGACT: 1, 1", 1000, 1) == 0)
-    // chevk if PDP conetxt is valid
-    if (command(PSTR("AT+CGDCONT?"), "internet.ht.hr", 1000, 1) == 0)
-      return 0;
+  // if (command(PSTR("AT+CGACT?"), "+CGACT: 1, 1", 1000, 1) == 0)
+  // chevk if PDP conetxt is valid
+  // if (command(PSTR("AT+CGDCONT?"), "internet.ht.hr", 1000, 1) == 0)
+  // return 0;
+
+  // attach to PS service (GPRS)
+  if (command(PSTR("AT+CGATT=1"), 10000, 1) == -1) return -1;
 
   // define a PDP context with CID 1
   if (command(CGDCONT) == -1) return -1;
